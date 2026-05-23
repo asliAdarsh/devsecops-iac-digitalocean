@@ -1,0 +1,5 @@
+project_name = "fintrack-core-hub"
+environment  = "Development"
+region       = "sgp1"
+vpc_name     = "hub-core-network"
+cidr_range   = "10.0.0.0/16"

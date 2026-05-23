@@ -1,0 +1,80 @@
+name: "FinTrack Workload GitOps Pipeline"
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Workload/Spokes/fintrack/**'
+      - 'Deployment/Spokes/fintrack/**'
+  push:
+    branches: [ main ]
+    paths:
+      - 'Workload/Spokes/fintrack/**'
+
+jobs:
+  # ==========================================
+  # PULL REQUEST: SEQUENTIAL TESTING AND PLANS
+  # ==========================================
+  plan-network:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/terraform-plan.yml
+    with:
+      working_directory: 'Workload/Spokes/fintrack/network'
+      tfvars_file: '../../../../Deployment/Spokes/fintrack/dev.tfvars'
+      state_key: 'spokes/fintrack/network.tfstate'
+      artifact_name: 'fintrack-network-tfplan'
+    secrets: inherit
+
+  plan-data:
+    if: github.event_name == 'pull_request'
+    needs: plan-network # Wait for network syntax validation
+    uses: ./.github/workflows/terraform-plan.yml
+    with:
+      working_directory: 'Workload/Spokes/fintrack/data'
+      tfvars_file: '../../../../Deployment/Spokes/fintrack/dev.tfvars'
+      state_key: 'spokes/fintrack/data.tfstate'
+      artifact_name: 'fintrack-data-tfplan'
+    secrets: inherit
+
+  plan-identity:
+    if: github.event_name == 'pull_request'
+    needs: plan-data
+    uses: ./.github/workflows/terraform-plan.yml
+    with:
+      working_directory: 'Workload/Spokes/fintrack/identity'
+      tfvars_file: '../../../../Deployment/Spokes/fintrack/dev.tfvars'
+      state_key: 'spokes/fintrack/identity.tfstate'
+      artifact_name: 'fintrack-identity-tfplan'
+    secrets: inherit
+
+  # ==========================================
+  # MERGE TO MAIN: SEQUENTIAL PROVISIONING
+  # ==========================================
+  apply-network:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      working_directory: 'Workload/Spokes/fintrack/network'
+      state_key: 'spokes/fintrack/network.tfstate'
+      artifact_name: 'fintrack-network-tfplan'
+    secrets: inherit
+
+  apply-data:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: apply-network # CRITICAL: Network must fully exist before DB deployment!
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      working_directory: 'Workload/Spokes/fintrack/data'
+      state_key: 'spokes/fintrack/data.tfstate'
+      artifact_name: 'fintrack-data-tfplan'
+    secrets: inherit
+
+  apply-identity:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: apply-data # CRITICAL: DB and Droplets must exist before project binding!
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      working_directory: 'Workload/Spokes/fintrack/identity'
+      state_key: 'spokes/fintrack/identity.tfstate'
+      artifact_name: 'fintrack-identity-tfplan'
+    secrets: inherit
