@@ -1,5 +1,9 @@
-project_name = "fintrack-core-hub"
-environment  = "Development"
-region       = "sgp1"
-vpc_name     = "hub-core-network"
-cidr_range   = "10.0.0.0/16"
+# Target regional datacenter profile
+region      = "sgp1"
+environment = "dev"
+
+# Naming and scoping tags for administrative boundaries
+project_name = "fintrack-Core-Hub"
+
+# Central VPC backbone CIDR routing block configuration
+vpc_cidr = "10.0.0.0/16"

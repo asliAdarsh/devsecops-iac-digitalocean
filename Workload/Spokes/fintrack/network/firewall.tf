@@ -1,30 +1,8 @@
-resource "digitalocean_firewall" "fintrack_fw" {
-  name        = "${var.app_name}-${var.environment}-firewall"
-  droplet_ids = digitalocean_droplet.fintrack_nodes[*].id
+# Call the reusable architectural security standard from our central modules folder
+module "fintrack_security_barrier" {
+  source        = "../../../../Modules/firewall"
+  firewall_name = "${var.app_name}-${var.environment}-firewall"
 
-  inbound_rule {
-    protocol         = "tcp"
-    port_range       = "22"
-    source_addresses = ["0.0.0.0/0"]
-  }
-  inbound_rule {
-    protocol         = "tcp"
-    port_range       = "80"
-    source_addresses = ["0.0.0.0/0"]
-  }
-  inbound_rule {
-    protocol         = "tcp"
-    port_range       = "443"
-    source_addresses = ["0.0.0.0/0"]
-  }
-  outbound_rule {
-    protocol              = "tcp"
-    port_range            = "1-65535"
-    destination_addresses = ["0.0.0.0/0"]
-  }
-  outbound_rule {
-    protocol              = "udp"
-    port_range            = "1-65535"
-    destination_addresses = ["0.0.0.0/0"]
-  }
+  # Pulls the array of resource IDs directly out of your local compute module/resource
+  droplet_ids = module.fintrack_compute.droplet_ids
 }
