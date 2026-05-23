@@ -1,0 +1,73 @@
+name: "Reusable Terraform Plan"
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        required: true
+        type: string
+      tfvars_file:
+        required: true
+        type: string
+      state_key:
+        required: true
+        type: string
+      artifact_name:
+        required: true
+        type: string
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.7"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+        working-directory: ${{ inputs.working_directory }}
+
+      # Injects partial backend configurations dynamically at initialization runtime
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="key=${{ inputs.state_key }}" \
+            -backend-config="bucket=${{ secrets.DO_SPACES_BUCKET }}"
+            -backend-config="endpoint=sgp1.digitaloceanspaces.com" \
+            -backend-config="region=us-east-1" \
+            -backend-config="skip_credentials_validation=true" \
+            -backend-config="skip_metadata_api_check=true"
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: ${{ inputs.working_directory }}
+
+      # Compiles the plan directly into an immutable binary file
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var="state_bucket_name=${{ secrets.DO_SPACES_BUCKET }}" \
+            -var-file="${{ inputs.tfvars_file }}" \
+            -out=tfplan
+        working-directory: ${{ inputs.working_directory }}
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+
+      # Persists the plan as a secure workflow artifact for the Apply stage
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.working_directory }}/tfplan
+          retention-days: 1

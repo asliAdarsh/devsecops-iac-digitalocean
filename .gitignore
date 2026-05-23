@@ -1,0 +1,13 @@
+# Local terraform directories
+.terraform/
+*.ids
+*.egg-info
+
+# State files
+*.tfstate
+*.tfstate.backup
+*.tfplan
+
+# Variable files containing sensitive development keys
+# *.tfvars
+*.tfvars.json
