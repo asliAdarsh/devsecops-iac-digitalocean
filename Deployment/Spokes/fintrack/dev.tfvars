@@ -1,6 +1,6 @@
 # Target region and tenancy tracking environment flags
 region      = "sgp1"
-environment = "dev"
+environment = "Development"
 app_name    = "fintrack"
 
 # State data backend target lookup config

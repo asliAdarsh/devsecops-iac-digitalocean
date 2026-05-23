@@ -6,6 +6,9 @@ data "terraform_remote_state" "spoke_network" {
     bucket   = var.state_bucket_name
     key      = "spokes/fintrack/network.tfstate"
     region   = "us-east-1"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
   }
 }
 
@@ -17,5 +20,8 @@ data "terraform_remote_state" "spoke_data" {
     bucket   = var.state_bucket_name
     key      = "spokes/fintrack/data.tfstate"
     region   = "us-east-1"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
   }
 }

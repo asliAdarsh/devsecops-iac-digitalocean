@@ -1,5 +1,5 @@
 region      = "sgp1"
-environment = "dev"
+environment = "Development"
 project_name = "fintrack-Core-Hub"
 vpc_name   = "core-hub-vpc"
 cidr_range = "10.0.0.0/16"

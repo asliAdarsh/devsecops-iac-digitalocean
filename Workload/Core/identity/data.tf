@@ -5,5 +5,8 @@ data "terraform_remote_state" "core_network" {
     bucket   = "fintrack-tfstate-bucket"
     key      = "core/network/global.tfstate"
     region   = "us-east-1"
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
   }
 }
