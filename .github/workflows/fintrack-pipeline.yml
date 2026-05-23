@@ -27,7 +27,7 @@ jobs:
     uses: ./.github/workflows/terraform-plan.yml
     with:
       working_directory: 'Workload/Core/network'
-      tfvars_file: '../.././Deployment/Core/global.tfvars'
+      tfvars_file: '../../../Deployment/Core/global.tfvars'
       state_key: 'core/network.tfstate'
       artifact_name: 'core-network-tfplan'
     secrets: inherit
