@@ -11,7 +11,7 @@ resource "digitalocean_droplet" "vm" {
   name       = var.droplet_count > 1 ? "${var.droplet_name}-node-${count.index + 1}" : var.droplet_name
   region     = var.region
   size       = var.size
-  image      = "ubuntu-24-04-lts"
+  image      = var.vm_image
   monitoring = true
   vpc_uuid   = var.vpc_uuid
   tags       = var.tags

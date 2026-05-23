@@ -4,6 +4,6 @@ output "database_cluster_id" {
 }
 
 output "database_urn" {
-  value       = digitalocean_database_cluster.mongodb_cluster.urn
-  description = "The uniform resource name required for Identity layer project workspace binding."
+  value       = digitalocean_database_cluster.db.urn
+  description = "The uniform resource name for the database cluster"
 }

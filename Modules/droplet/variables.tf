@@ -29,3 +29,8 @@ variable "tags" {
   description = "Metadata grouping tags applied to the instances."
   default     = []
 }
+variable "vm_image" {
+  type        = string
+  description = "The slug identifier for the VM image to use for the droplet."
+  default     = "ubuntu-24-04-x64"
+}
