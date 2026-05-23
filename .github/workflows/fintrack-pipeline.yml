@@ -5,11 +5,15 @@ on:
     branches: [ main ]
     paths:
       - 'Workload/Spokes/fintrack/**'
-      - 'Deployment/Spokes/fintrack/**'
+      - 'Workload/Core/**'             
+      - 'Modules/**'                  
+      - 'Deployment/**'               
   push:
     branches: [ main ]
     paths:
       - 'Workload/Spokes/fintrack/**'
+      - 'Workload/Core/**'             
+      - 'Modules/**'
 
 jobs:
   # ==========================================
