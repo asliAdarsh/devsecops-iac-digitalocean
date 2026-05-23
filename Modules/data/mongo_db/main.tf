@@ -1,4 +1,11 @@
-# Provision the managed MongoDB Cluster instance inside the Software-Defined Private Network
+terraform {
+  required_providers {
+    digitalocean = {
+      source  = "digitalocean/digitalocean"
+      version = "~> 2.39.0"
+    }
+  }
+}
 resource "digitalocean_database_cluster" "mongodb_cluster" {
   name                 = var.cluster_name
   engine               = "mongodb"
