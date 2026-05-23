@@ -36,12 +36,15 @@ jobs:
       - name: Terraform Init
         run: |
           terraform init \
-                -backend-config="bucket=${{ secrets.DO_SPACES_BUCKET }}" \
-                -backend-config="endpoint=sgp1.digitaloceanspaces.com" \
-                -backend-config="key=${{ inputs.state_key }}" \
-                -backend-config="access_key=${{ secrets.DO_SPACES_ACCESS_KEY }}" \
-                -backend-config="secret_key=${{ secrets.DO_SPACES_SECRET_KEY }}" \
-                -backend-config="region=us-east-1" # ◄── ADD THIS EXACT CRITICAL FLAG!
+            -backend-config="bucket=${{ secrets.DO_SPACES_BUCKET }}" \
+            -backend-config="endpoint=sgp1.digitaloceanspaces.com" \
+            -backend-config="key=${{ inputs.state_key }}" \
+            -backend-config="access_key=${{ secrets.DO_SPACES_ACCESS_KEY }}" \
+            -backend-config="secret_key=${{ secrets.DO_SPACES_SECRET_KEY }}" \
+            -backend-config="region=us-east-1" \
+            -backend-config="skip_credentials_validation=true" \
+            -backend-config="skip_metadata_api_check=true" \
+            -backend-config="skip_region_validation=true"
         working-directory: ${{ inputs.working_directory }}
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
