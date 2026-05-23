@@ -7,13 +7,15 @@ on:
       - 'Workload/Spokes/fintrack/**'
       - 'Workload/Core/**'             
       - 'Modules/**'                  
-      - 'Deployment/**'               
+      - 'Deployment/**'     
+      - '.github/workflows/**'          
   push:
     branches: [ main ]
     paths:
       - 'Workload/Spokes/fintrack/**'
       - 'Workload/Core/**'             
       - 'Modules/**'
+      - '.github/workflows/**'
 
 jobs:
   # ==========================================
