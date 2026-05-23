@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    digitalocean = {
+      source  = "digitalocean/digitalocean"
+      version = "~> 2.39.0"
+    }
+  }
+}
 resource "digitalocean_firewall" "fw" {
   name        = var.firewall_name
   droplet_ids = var.droplet_ids
