@@ -14,3 +14,4 @@ instance_count = 1
 db_size_slug     = "db-s-1vcpu-1gb"
 db_node_count    = 1
 initial_database = "fintrack_dev_store"
+vm_image = "ubuntu-24-04-x64"
