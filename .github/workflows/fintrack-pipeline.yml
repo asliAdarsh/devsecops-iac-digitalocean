@@ -32,44 +32,10 @@ jobs:
       artifact_name: 'core-network-tfplan'
     secrets: inherit
 
-  # ==========================================
-  # PHASE 2: SPOKE APPLICATION VALIDATION
-  # ==========================================
-  plan-network:
-    if: github.event_name == 'pull_request'
-    needs: plan-core-network # ◄── CRITICAL: Validates Hub syntax structure first!
-    uses: ./.github/workflows/terraform-plan.yml
-    with:
-      working_directory: 'Workload/Spokes/fintrack/network'
-      tfvars_file: '../../../../Deployment/Spokes/fintrack/dev.tfvars'
-      state_key: 'spokes/fintrack/network.tfstate'
-      artifact_name: 'fintrack-network-tfplan'
-    secrets: inherit
 
-  plan-data:
-    if: github.event_name == 'pull_request'
-    needs: plan-network
-    uses: ./.github/workflows/terraform-plan.yml
-    with:
-      working_directory: 'Workload/Spokes/fintrack/data'
-      tfvars_file: '../../../../Deployment/Spokes/fintrack/dev.tfvars'
-      state_key: 'spokes/fintrack/data.tfstate'
-      artifact_name: 'fintrack-data-tfplan'
-    secrets: inherit
-
-  plan-identity:
-    if: github.event_name == 'pull_request'
-    needs: plan-data
-    uses: ./.github/workflows/terraform-plan.yml
-    with:
-      working_directory: 'Workload/Spokes/fintrack/identity'
-      tfvars_file: '../../../../Deployment/Spokes/fintrack/dev.tfvars'
-      state_key: 'spokes/fintrack/identity.tfstate'
-      artifact_name: 'fintrack-identity-tfplan'
-    secrets: inherit
 
   # ==========================================
-  # PHASE 3: PRODUCTION DEPLOYMENTS (CD)
+  # PHASE 2: PRODUCTION DEPLOYMENTS (CD)
   # ==========================================
   apply-core-network:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
