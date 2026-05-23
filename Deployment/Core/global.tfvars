@@ -6,4 +6,4 @@ environment = "dev"
 project_name = "fintrack-Core-Hub"
 
 # Central VPC backbone CIDR routing block configuration
-vpc_cidr = "10.0.0.0/16"
+cidr_range = "10.0.0.0/16"

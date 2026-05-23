@@ -58,6 +58,7 @@ jobs:
       - name: Terraform Plan
         run: |
           terraform plan \
+            -input=false \ #
             -var="state_bucket_name=${{ secrets.DO_SPACES_BUCKET }}" \
             -var-file="${{ inputs.tfvars_file }}" \
             -out=tfplan
