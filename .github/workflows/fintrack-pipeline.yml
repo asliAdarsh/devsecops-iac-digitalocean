@@ -5,24 +5,39 @@ on:
     branches: [ main ]
     paths:
       - 'Workload/Spokes/fintrack/**'
-      - 'Workload/Core/**'             
-      - 'Modules/**'                  
-      - 'Deployment/**'     
-      - '.github/workflows/**'          
+      - 'Workload/Core/**'
+      - 'Modules/**'
+      - 'Deployment/**'
+      - '.github/workflows/**'
   push:
     branches: [ main ]
     paths:
       - 'Workload/Spokes/fintrack/**'
-      - 'Workload/Core/**'             
+      - 'Workload/Core/**'
       - 'Modules/**'
+      - 'Deployment/**'
       - '.github/workflows/**'
 
 jobs:
   # ==========================================
-  # PULL REQUEST: SEQUENTIAL TESTING AND PLANS
+  # PHASE 1: CORE HUB PLATFORM VALIDATION
+  # ==========================================
+  plan-core-network:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/terraform-plan.yml
+    with:
+      working_directory: 'Workload/Core/network'
+      tfvars_file: '../../../../Deployment/Core/global.tfvars'
+      state_key: 'core/network.tfstate'
+      artifact_name: 'core-network-tfplan'
+    secrets: inherit
+
+  # ==========================================
+  # PHASE 2: SPOKE APPLICATION VALIDATION
   # ==========================================
   plan-network:
     if: github.event_name == 'pull_request'
+    needs: plan-core-network # ◄── CRITICAL: Validates Hub syntax structure first!
     uses: ./.github/workflows/terraform-plan.yml
     with:
       working_directory: 'Workload/Spokes/fintrack/network'
@@ -33,7 +48,7 @@ jobs:
 
   plan-data:
     if: github.event_name == 'pull_request'
-    needs: plan-network # Wait for network syntax validation
+    needs: plan-network
     uses: ./.github/workflows/terraform-plan.yml
     with:
       working_directory: 'Workload/Spokes/fintrack/data'
@@ -54,10 +69,20 @@ jobs:
     secrets: inherit
 
   # ==========================================
-  # MERGE TO MAIN: SEQUENTIAL PROVISIONING
+  # PHASE 3: PRODUCTION DEPLOYMENTS (CD)
   # ==========================================
+  apply-core-network:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      working_directory: 'Workload/Core/network'
+      state_key: 'core/network.tfstate'
+      artifact_name: 'core-network-tfplan'
+    secrets: inherit
+
   apply-network:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: apply-core-network # ◄── CRITICAL: Core networks run first and output state data!
     uses: ./.github/workflows/terraform-apply.yml
     with:
       working_directory: 'Workload/Spokes/fintrack/network'
@@ -67,7 +92,7 @@ jobs:
 
   apply-data:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: apply-network # CRITICAL: Network must fully exist before DB deployment!
+    needs: apply-network
     uses: ./.github/workflows/terraform-apply.yml
     with:
       working_directory: 'Workload/Spokes/fintrack/data'
@@ -77,7 +102,7 @@ jobs:
 
   apply-identity:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: apply-data # CRITICAL: DB and Droplets must exist before project binding!
+    needs: apply-data
     uses: ./.github/workflows/terraform-apply.yml
     with:
       working_directory: 'Workload/Spokes/fintrack/identity'
