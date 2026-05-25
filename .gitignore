@@ -11,3 +11,4 @@
 # Variable files containing sensitive development keys
 # *.tfvars
 *.tfvars.json
+.terraform.lock.hcl

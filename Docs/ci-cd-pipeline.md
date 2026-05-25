@@ -1,36 +1,37 @@
-# CI/CD Pipeline Documentation
+# CI/CD Pipeline — Learning GitHub Actions + Terraform Together 🔄
 
-> **Audience**: DevOps engineers, platform engineers, and developers who need to understand, modify, or troubleshoot the CI/CD pipeline.
+> **If you're new to GitOps or setting up Terraform CI/CD, this is the story of how I learned it — including the 3-hour debugging session that taught me about the "Headless Init Fix."**
 
 ---
 
 ## Table of Contents
 
-- [GitOps Philosophy](#-gitops-philosophy)
-- [Pipeline Overview](#-pipeline-overview)
-- [Workflow Files](#-workflow-files)
-- [The Plan-Apply Split Pattern](#-the-plan-apply-split-pattern)
-- [Sequential Execution Order](#-sequential-execution-order)
-- [Reusable Workflows](#-reusable-workflows)
-- [Headless Init Fix Explained](#-headless-init-fix-explained)
-- [State Key Strategy](#-state-key-strategy)
-- [Plan Binary Artifacts](#-plan-binary-artifacts)
+- [GitOps: The One-Sentence Explanation](#-gitops-the-one-sentence-explanation)
+- [Pipeline Overview: What Happens When](#-pipeline-overview-what-happens-when)
+- [The Three Workflow Files](#-the-three-workflow-files)
+- [The Plan-Apply Split (Why Two Phases?)](#-the-plan-apply-split-why-two-phases)
+- [Sequential Execution: Why Layers Can't Go Parallel](#-sequential-execution-why-layers-cant-go-parallel)
+- [The Headless Init Fix (My 3-Hour Debugging Saga)](#-the-headless-init-fix-my-3-hour-debugging-saga)
+- [State Key Strategy: Naming Your Files](#-state-key-strategy-naming-your-files)
+- [Plan Binary Artifacts: The Magic of Frozen Plans](#-plan-binary-artifacts-the-magic-of-frozen-plans)
 - [Adding a New Spoke to the Pipeline](#-adding-a-new-spoke-to-the-pipeline)
-- [Adding a New Environment](#-adding-a-new-environment)
-- [Troubleshooting CI/CD](#-troubleshooting-cicd)
-- [Security in the Pipeline](#-security-in-the-pipeline)
+- [Troubleshooting: What I Broke and How I Fixed It](#-troubleshooting-what-i-broke-and-how-i-fixed-it)
+- [Security: What the Pipeline Can Access](#-security-what-the-pipeline-can-access)
 
 ---
 
-## 🤖 GitOps Philosophy
+## 🤖 GitOps: The One-Sentence Explanation
 
-This pipeline follows **GitOps** principles:
+**GitOps means Git is the single source of truth. Want to change infrastructure? Edit a file, open a PR, get it reviewed, merge it. The pipeline does the rest.**
 
-1. **Git is the single source of truth** — All infrastructure definitions live in this repository
-2. **Pull Requests drive change** — Every modification goes through a PR with automated planning
-3. **Review before apply** — Team members review `terraform plan` output in the PR before merging
-4. **Reconcilation loop** — The pipeline continuously ensures the cloud matches what's in Git
-5. **No manual apply** — Never run `terraform apply` on a local machine for production changes
+Before GitOps, I used to SSH into servers and run commands. Or run `terraform apply` from my laptop. GitOps changed everything:
+
+1. **All changes go through Git** — no more "I ran this command on my machine and it worked" nonsense
+2. **PRs create a paper trail** — every change has a review, a discussion, and a plan output
+3. **The pipeline is the enforcer** — it checks formatting, validates syntax, runs a plan, and only applies when you merge
+4. **No manual applies** — never again will I run `terraform apply` in production from a terminal
+
+Here's the flow:
 
 ```
          ┌─────────────────────────────────┐
@@ -70,20 +71,20 @@ This pipeline follows **GitOps** principles:
 
 ---
 
-## 📐 Pipeline Overview
+## 📐 Pipeline Overview: What Happens When
 
-### Trigger Events
+### When the Pipeline Triggers
 
-The pipeline is triggered by two events:
+The pipeline has two trigger events:
 
-| Event | Branch | Path Filter | Purpose |
-|-------|--------|-------------|---------|
-| `pull_request` | `main` | `Workload/Spokes/fintrack/**` or `Deployment/Spokes/fintrack/**` | Run `terraform plan` for review |
-| `push` | `main` | `Workload/Spokes/fintrack/**` | Run `terraform apply` for deployment |
+| Event | Branch | Watched Paths | What Happens |
+|-------|--------|---------------|-------------|
+| Pull Request | main | `Workload/Spokes/fintrack/**` or `Deployment/Spokes/fintrack/**` | Runs `terraform plan` — shows what would change |
+| Push | main | Same paths | Runs `terraform apply` — executes the plan |
 
-> **Path filtering**: Changes outside the watched paths (e.g., changes to `Modules/` core structure or `Docs/`) **do not** trigger the pipeline. This is by design — module changes are tested through spoke usage.
+> **Path filtering**: Changes to `Docs/`, `README.md`, or other non-infrastructure files DON'T trigger the pipeline. I learned this after seeing 10 pipeline runs for documentation typos.
 
-### Pipeline at a Glance
+### The Pipeline at a Glance
 
 ```
 PR EVENT                          MERGE EVENT
@@ -118,18 +119,18 @@ PR EVENT                          MERGE EVENT
 
 ---
 
-## 📁 Workflow Files
+## 📁 The Three Workflow Files
 
 ### 1. `fintrack-pipeline.yml` — The Orchestrator
 
-This is the **entry point** workflow. It defines:
-- **When** to run (PR to `main`, Push to `main`)
+This is the **main workflow**. It decides:
+- **When** to run (PR to main, Push to main)
 - **Which** files trigger it (path filters)
 - **The order** of jobs (via `needs:` dependencies)
 - **Which** reusable workflow to call for each job
 
 ```yaml
-# Key structure
+# Simplified structure
 jobs:
   plan-network:     # PR only: Plan the network layer
     if: github.event_name == 'pull_request'
@@ -143,224 +144,144 @@ jobs:
 
   plan-data:        # PR only: Plan data layer AFTER network
     if: github.event_name == 'pull_request'
-    needs: plan-network
-    # ... same pattern
+    needs: plan-network   # ← This is how I enforce order
+    uses: ./.github/workflows/terraform-plan.yml
+    # ... different working_directory and state_key
+    secrets: inherit
 
-  plan-identity:    # PR only: Plan identity layer AFTER data
-    if: github.event_name == 'pull_request'
-    needs: plan-data
-    # ... same pattern
-
-  apply-network:    # Merge only: Apply network
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    # ... calls terraform-apply.yml
-
-  apply-data:       # Merge only: Apply data AFTER network applied
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: apply-network
-    # ... calls terraform-apply.yml
-
-  apply-identity:   # Merge only: Apply identity AFTER data applied
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: apply-data
-    # ... calls terraform-apply.yml
+  # ... and so on for plan-identity, apply-network, etc.
 ```
 
-### 2. `terraform-plan.yml` — Reusable CI Workflow
+> 💡 **Insight**: The `needs:` keyword is what creates the sequential chain. `plan-data` won't start until `plan-network` finishes successfully. This is critical because `plan-data` reads state produced by the network layer.
 
-Called by the orchestrator for **each plan job**. Handles:
+### 2. `terraform-plan.yml` — The Reusable Plan Workflow
+
+This is called 3 times (once per layer) during the PR phase. It handles:
 
 1. **Checkout** — Pull the code from the PR branch
 2. **Setup Terraform** — Install Terraform 1.5.7
-3. **Format Check** — `terraform fmt -check` ensures consistent code style
-4. **Init** — Initialize with backend config pointing to DigitalOcean Spaces
-5. **Validate** — `terraform validate` checks syntax and internal consistency
-6. **Plan** — `terraform plan -out=tfplan` creates an executable plan binary
+3. **Format Check** — `terraform fmt -check` ensures consistent style
+4. **Init** — Initialize with backend config (this is where the Headless Init Fix lives)
+5. **Validate** — `terraform validate` checks syntax
+6. **Plan** — `terraform plan -out=tfplan` creates the execution plan binary
 7. **Upload Artifact** — Save the plan binary for the apply stage
 
 ```yaml
-# Key parameters (workflow_call inputs):
+# Key inputs the caller must provide:
 inputs:
   working_directory:  # e.g., "Workload/Spokes/fintrack/network"
   tfvars_file:        # Path to .tfvars from working directory
-  state_key:          # State file path in Spaces, e.g., "spokes/fintrack/network.tfstate"
-  artifact_name:      # Unique name for plan artifact, e.g., "fintrack-network-tfplan"
+  state_key:          # State file path, e.g., "spokes/fintrack/network.tfstate"
+  artifact_name:      # Unique name for plan artifact
 ```
 
-### 3. `terraform-apply.yml` — Reusable CD Workflow
+### 3. `terraform-apply.yml` — The Reusable Apply Workflow
 
-Called by the orchestrator for **each apply job**. Handles:
+Called 3 times (once per layer) during the merge phase. It handles:
 
-1. **Checkout** — Pull `main` branch after merge
-2. **Setup Terraform** — Same Terraform version as plan
-3. **Init** — Same backend configuration as plan (ensures consistency)
-4. **Download Artifact** — Fetch the plan binary produced during the PR phase
-5. **Apply** — `terraform apply tfplan` executes the pre-compiled plan
+1. **Checkout** — Pull main branch
+2. **Setup Terraform** — Same version as plan
+3. **Init** — Same backend configuration (must match exactly)
+4. **Download Artifact** — Fetch the plan binary from the PR
+5. **Apply** — `terraform apply tfplan` — executes the pre-compiled plan
 
-```yaml
-# Key difference from plan workflow:
-# No fmt -check, no validate, no plan
-# Just: init → download → apply
-```
+**Key difference from plan**: No `fmt -check`, no `validate`, no `plan`. Just init → download → apply. The plan was already validated during the PR phase.
 
 ---
 
-## 🔄 The Plan-Apply Split Pattern
+## 🔄 The Plan-Apply Split (Why Two Phases?)
 
-### Why Split Plan and Apply?
+### Why Not Just Run `terraform apply` Directly?
 
-| Reason | Explanation |
-|--------|-------------|
-| **Safety** | Review plan output before execution |
-| **Auditability** | Every change has a recorded plan in the PR |
-| **Consistency** | The exact same plan binary is used in apply — no drift |
-| **Least Privilege** | CI only needs read access; CD needs write access |
-| **Rollback** | Can reject a PR without ever touching infrastructure |
+I learned this the hard way after accidentally destroying a resource. The Plan-Apply split is a **safety gate**:
 
-### How It Works
+| Reason | What It Prevents |
+|--------|-----------------|
+| **Review before execution** | You see the plan output in the PR before anything happens |
+| **Consistency guarantee** | The exact same plan binary is used in apply — no drift |
+| **Audit trail** | Every change has a recorded plan attached to a PR |
+| **Rollback opportunity** | You can close the PR and nothing was ever applied |
+| **Least privilege** | PR workflow only needs read access; merge workflow needs write access |
 
-**Stage 1 — Pull Request (CI)**:
-```
-terraform plan -out=tfplan
-    ↓
-Upload tfplan as workflow artifact
-    ↓
-Review plan in PR comments
-```
+### How the Plan Binary Works
 
-**Stage 2 — Merge to main (CD)**:
-```
-Download tfplan artifact (same binary from PR)
-    ↓
-terraform apply tfplan
-```
+Here's the magic: The plan binary (`tfplan`) is a **snapshot of exactly what will be created**. It includes:
 
-> 🔑 **Critical**: The plan binary (`tfplan`) is a **snapshot** of exactly what will be created. It includes the Terraform configuration, state references, and execution graph. Applying this same binary on merge guarantees that what was reviewed is what gets applied — even if someone pushed a change to `main` between the PR and the merge.
-
-### What's in a Plan Binary?
-
-A `tfplan` file contains:
-- The complete Terraform configuration at the time of planning
+- The complete Terraform configuration at plan time
 - The current state file contents
-- The planned execution graph (what creates, modifies, or destroys)
-- All variable values that were passed at plan time
+- The execution graph (what creates, modifies, or destroys)
+- All variable values that were passed
 
-This is why it's critical to **keep the artifact as a binary** (not human-readable text) — it's a self-contained execution package.
+```bash
+# PR phase: create the plan
+terraform plan -out=tfplan
+# → Uploads tfplan as an artifact called "fintrack-network-tfplan"
+
+# Merge phase: use the exact same plan
+terraform apply tfplan
+# → Guaranteed to do exactly what was in the PR's plan output
+```
+
+> 🔑 **This is the killer feature**: Even if someone pushes to `main` between the PR review and the merge, the apply uses the plan from the PR — not the current state of `main`. What you reviewed is what gets applied, period.
 
 ---
 
-## 📋 Sequential Execution Order
+## 📋 Sequential Execution: Why Layers Can't Go Parallel
 
-### Why Sequential?
+### The Dependency Chain
 
-The layers have **data dependencies** that form a chain:
+The layers have **hard dependencies** — each one needs data from the one before it:
 
-```text
-Layer:           Needs Output:          From:
-──────           ─────────────          ────
-Spoke Network    hub_vpc_id             Core Network
-Spoke Data       spoke_vpc_id           Spoke Network
-Spoke Identity   droplet_urns           Spoke Network
-                 database_urn           Spoke Data
-```
+| Layer | Needs Output From |
+|-------|------------------|
+| Spoke Network | Core Network (hub_vpc_id) |
+| Spoke Data | Spoke Network (spoke_vpc_id) |
+| Spoke Identity | Spoke Network (droplet_urns) + Spoke Data (database_urn) |
 
-These are enforced via the `needs:` keyword in GitHub Actions:
+These are enforced via `needs:` in GitHub Actions:
 
 ```yaml
 plan-network:
   # No needs — first in sequence
 
 plan-data:
-  needs: plan-network      ← Wait for network plan to complete
+  needs: plan-network      ← Wait for network plan
 
 plan-identity:
-  needs: plan-data          ← Wait for data plan to complete
+  needs: plan-data          ← Wait for data plan
 ```
 
-### What If Parallel Execution Were Allowed?
+### What I Learned About Dependencies
 
-If all three layers planned simultaneously:
-- **Spoke Data** would fail immediately (can't find spoke VPC state)
-- **Spoke Identity** would fail immediately (can't find droplet or DB state)
-- GitHub Actions would waste 3-10 minutes on failed jobs
+If all three layers ran in parallel:
+- **Spoke Data** would fail (can't find spoke VPC state — it doesn't exist yet)
+- **Spoke Identity** would fail (can't find droplet or DB state)
+- I'd waste 3-10 minutes on failed jobs
 
-### Execution Time
-
-Typical timing per job (dev environment, small configuration):
-
-| Job | Plan Time | Apply Time |
-|-----|-----------|------------|
-| Network (1 droplet + firewall) | ~30s | ~90s |
-| Data (1 MongoDB node) | ~15s | ~120s |
-| Identity (project binding) | ~10s | ~10s |
-| **Total sequential** | **~55s** | **~220s** |
-
-> Plan jobs run sequentially but each one is fast. The total block is about 1 minute of planning per PR.
+So the pipeline runs in lockstep: one layer at a time. It takes about 55 seconds for all three plans and 220 seconds (~4 min) for all three applies.
 
 ---
 
-## ♻️ Reusable Workflows
+## 🧠 The Headless Init Fix (My 3-Hour Debugging Saga)
 
-### Why Reusable Workflows?
-
-Without reusable workflows, the pipeline file would repeat the same 20-line setup for each of the 6 jobs. Reusable workflows make the pipeline:
-
-- **DRY** — Define the plan/apply logic once, call it 3 times each
-- **Consistent** — Every layer gets the same init, validation, and apply process
-- **Maintainable** — Update Terraform version or init flags in one place
-
-### How `workflow_call` Works
-
-```yaml
-# terraform-plan.yml defines:
-name: "Reusable Terraform Plan"
-on:
-  workflow_call:
-    inputs:          # Parameters the caller must provide
-      working_directory:
-        required: true
-        type: string
-      tfvars_file:
-        required: true
-        type: string
-      state_key:
-        required: true
-        type: string
-      artifact_name:
-        required: true
-        type: string
-
-# Called from pipeline:
-plan-network:
-  uses: ./.github/workflows/terraform-plan.yml
-  with:
-    working_directory: 'Workload/Spokes/fintrack/network'
-    tfvars_file: '../../../../Deployment/Spokes/fintrack/dev.tfvars'
-    state_key: 'spokes/fintrack/network.tfstate'
-    artifact_name: 'fintrack-network-tfplan'
-  secrets: inherit
-```
-
-### Secrets Inheritance
-
-`secrets: inherit` passes **all** repository secrets from the caller workflow to the reusable workflow. This avoids needing to redeclare each secret in the `workflow_call` inputs.
-
----
-
-## 🧠 Headless Init Fix Explained
+This was the single most frustrating issue I hit, and it's the one I want every future reader to avoid.
 
 ### The Problem
 
-Terraform's S3 backend supports **partial configuration**:
+I was using partial S3 backend configuration — the `backend.tf` file just says `backend "s3" {}` with no values. The real config comes from CI flags:
 
 ```hcl
-# backend.tf
+# backend.tf — intentionally empty
 terraform {
-  backend "s3" {}    # Empty — config provided at init time
+  backend "s3" {}
 }
 ```
 
-This is useful for keeping secret values (access keys, bucket names) out of the codebase. However, in **headless CI environments**, `terraform init` with partial S3 config can **hang indefinitely** waiting for interactive input:
+This is the standard pattern for keeping secrets out of code. But when I ran this in GitHub Actions, `terraform init` would just **hang**. No output. No error. Just silence until the job timed out.
+
+### Why It Happened
+
+The AWS S3 driver (which Terraform uses under the hood for S3-compatible backends) requires a `region` parameter. Without it, Terraform prompts interactively:
 
 ```
 $ terraform init
@@ -372,11 +293,7 @@ region
   Enter a value: _
 ```
 
-This happens because:
-1. DigitalOcean Spaces provides S3-compatible storage via an **endpoint URL** (`sgp1.digitaloceanspaces.com`)
-2. The AWS S3 driver validates that a `region` is specified
-3. Without `region`, Terraform prompts interactively
-4. CI has no TTY, so it hangs until timeout
+In a headless CI environment, there's no one to type a value. So it just... waits. Forever.
 
 ### The Fix
 
@@ -387,78 +304,72 @@ Inject `region=us-east-1` at init time:
   run: |
     terraform init \
       -backend-config="bucket=${{ secrets.DO_SPACES_BUCKET }}" \
-      -backend-config="endpoint=sgp1.digitaloceanspaces.com" \
+      -backend-config="endpoint=https://sgp1.digitaloceanspaces.com" \
       -backend-config="key=${{ inputs.state_key }}" \
       -backend-config="access_key=${{ secrets.DO_SPACES_ACCESS_KEY }}" \
       -backend-config="secret_key=${{ secrets.DO_SPACES_SECRET_KEY }}" \
-      -backend-config="region=us-east-1"    # ← Bypasses the interactive prompt!
-  env:
-    AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY }}
-    AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_KEY }}
+      -backend-config="region=us-east-1"    # ← THIS LINE SAVES YOU
 ```
 
 ### Why `us-east-1`?
 
-DigitalOcean Spaces doesn't use AWS region names — it uses custom endpoints. The `region` value is only needed to satisfy the AWS SDK's internal validation. `us-east-1` is a safe dummy value that:
+DigitalOcean Spaces doesn't use AWS region names. The endpoint URL (`sgp1.digitaloceanspaces.com`) determines where you're connecting. The `region` value is ONLY needed to satisfy the AWS SDK's internal validation. `us-east-1` is a safe dummy value that:
+
 - Passes the SDK's format validation
-- Doesn't affect how Terraform connects to Spaces (the `endpoint` URL determines the actual target)
-- Works universally across all Spaces regions (sgp1, nyc3, ams3, etc.)
+- Doesn't affect connectivity (the endpoint URL controls that)
+- Works regardless of which Spaces region you're using
 
-### Why Not Set It in `backend.tf`?
-
-Setting `region` in `backend.tf` would hardcode a value that has no real meaning (Spaces doesn't use AWS regions). The CI injection approach keeps `backend.tf` clean and allows the dummy value to be documented inline where it matters most.
+> 📝 **I documented this in the CI/CD pipeline as the "Headless Init Fix" because I want my future self (and you) to never waste 3 hours on this again.**
 
 ---
 
-## 🔑 State Key Strategy
+## 🔑 State Key Strategy: Naming Your State Files
 
-The `state_key` parameter determines **where** each layer's state file is stored in the Spaces bucket.
+### The Convention
 
-### State Key Convention
+Each layer's state file has a predictable key:
 
-```text
+```
 {layer}/{module}.tfstate
 ```
 
-| State Key | Layer | Why This Key |
-|-----------|-------|-------------|
-| `core/network/global.tfstate` | Hub Network | `core/` for hub, `global` because it's shared |
-| `core/identity/global.tfstate` | Hub Identity | Same `core/` prefix |
-| `spokes/fintrack/network.tfstate` | Spoke Network | `spokes/{app}/` organizes by application |
-| `spokes/fintrack/data.tfstate` | Spoke Data | Same `spokes/{app}/` prefix |
-| `spokes/fintrack/identity.tfstate` | Spoke Identity | Same `spokes/{app}/` prefix |
+| State Key | What It Stores |
+|-----------|---------------|
+| `core/network.tfstate` | Hub VPC |
+| `core/identity.tfstate` | Hub Project |
+| `spokes/fintrack/network.tfstate` | FinTrack Droplets + Firewall |
+| `spokes/fintrack/data.tfstate` | FinTrack MongoDB |
+| `spokes/fintrack/identity.tfstate` | FinTrack Project binding |
 
 ### Why This Convention?
 
-1. **Namespacing** — `core/` vs `spokes/` prevents accidental collisions between hub and spoke states
-2. **Discoverability** — All files for one application are grouped under `spokes/{app}/`
-3. **Scalability** — Adding `spokes/payments/network.tfstate` is trivial and doesn't conflict
-4. **Consistency** — The key mirrors the directory structure (`Workload/Spokes/fintrack/network`)
+1. **Namespacing** — `core/` vs `spokes/` prevents accidental collisions between hub and spoke
+2. **Grouping** — All files for one app are under `spokes/{app}/`
+3. **Scalability** — Adding `spokes/payments/network.tfstate` is trivial
+4. **Consistency** — Mirrors the directory structure (`Workload/Spokes/fintrack/network`)
 
-### How It Maps
+### The Gotcha I Hit
 
-```yaml
-# In the pipeline:
-state_key: 'spokes/fintrack/network.tfstate'
+**Make sure your pipeline state keys match your `data.tf` references.**
 
-# Maps to Spaces bucket:
-# fintrack-tfstate-bucket/spokes/fintrack/network.tfstate
-```
+I had the pipeline writing state to `core/network.tfstate`, but my Core Identity's `data.tf` was reading from `core/network/global.tfstate`. Different key = different state = the identity layer couldn't find the VPC.
+
+**Fix**: Align everything to the same key convention. I standardized on the flat format (`core/network.tfstate`) everywhere.
 
 ---
 
-## 📦 Plan Binary Artifacts
+## 📦 Plan Binary Artifacts: The Magic of Frozen Plans
 
 ### What Gets Uploaded
 
-Each plan job produces a `tfplan` file — an **immutable binary** that encodes the complete execution plan:
+Each plan job produces a `tfplan` file — about 18KB for small configurations:
 
-```
+```bash
 $ ls -la tfplan
--rw-r--r-- 1 root root 18432 ... tfplan   # ~18KB for small configs
+-rw-r--r-- 1 root root 18432 ... tfplan
 ```
 
-### Artifact Naming Convention
+### Artifact Naming
 
 ```
 {app}-{layer}-tfplan
@@ -466,25 +377,24 @@ $ ls -la tfplan
 
 | Artifact Name | Content |
 |---------------|---------|
-| `fintrack-network-tfplan` | Plan for `Workload/Spokes/fintrack/network` |
-| `fintrack-data-tfplan` | Plan for `Workload/Spokes/fintrack/data` |
-| `fintrack-identity-tfplan` | Plan for `Workload/Spokes/fintrack/identity` |
+| `fintrack-network-tfplan` | Plan for the network layer |
+| `fintrack-data-tfplan` | Plan for the data layer |
+| `fintrack-identity-tfplan` | Plan for the identity layer |
 
-### Artifact Retention
+### Retention: 1 Day
 
 ```yaml
-- name: Upload Plan Artifact
-  uses: actions/upload-artifact@v4
+- uses: actions/upload-artifact@v4
   with:
-    retention-days: 1    ← Plan artifacts expire after 1 day
+    retention-days: 1    # ← Plans expire after 1 day
 ```
 
-**Why only 1 day retention?**
-- PRs are typically reviewed and merged within 24 hours
-- Plan binaries become invalid if someone pushes new commits to the branch
-- Reduces storage costs on GitHub
+**Why only 1 day?**
+- PRs are usually reviewed within 24 hours
+- Plans become invalid if someone pushes new commits to the branch
+- Keeps storage costs on GitHub low
 
-> If a PR stays open longer than a day, push a new commit (even an empty one) to re-trigger the pipeline and get a fresh plan.
+> If a PR stays open longer than a day, push a new commit to re-trigger the pipeline and get a fresh plan.
 
 ### How Apply Uses the Artifact
 
@@ -492,41 +402,35 @@ $ ls -la tfplan
 - name: Download Plan Artifact
   uses: actions/download-artifact@v4
   with:
-    name: ${{ inputs.artifact_name }}     # Matches the upload name
-    path: ${{ inputs.working_directory }} # Places tfplan in the right directory
+    name: ${{ inputs.artifact_name }}
+    path: ${{ inputs.working_directory }}
 
 - name: Terraform Apply
-  run: terraform apply -input=false tfplan  # Uses the exact same binary
-  working-directory: ${{ inputs.working_directory }}
+  run: terraform apply -input=false tfplan  # ← Uses exact same binary
 ```
 
 ---
 
 ## ➕ Adding a New Spoke to the Pipeline
 
-### Step-by-step Example: Adding "payments" App
+If I wanted to add a "payments" app alongside FinTrack, here's what I'd do:
 
-**1. Create workload directories:**
-
-```text
+**1. Create workload directories** (same pattern as `fintrack`):
+```
 Workload/Spokes/payments/
 ├── network/
 ├── data/
 └── identity/
 ```
 
-Follow the same `.tf` file structure as `fintrack`.
-
-**2. Create deployment configuration:**
-
-```text
+**2. Create deployment config**:
+```
 Deployment/Spokes/payments/dev.tfvars
 ```
 
-**3. Add pipeline jobs (`fintrack-pipeline.yml`):**
+**3. Add pipeline jobs** — 3 plan jobs and 3 apply jobs, identical pattern but with different paths and names:
 
 ```yaml
-# PR phase
 plan-payments-network:
   if: github.event_name == 'pull_request'
   uses: ./.github/workflows/terraform-plan.yml
@@ -536,195 +440,93 @@ plan-payments-network:
     state_key: 'spokes/payments/network.tfstate'
     artifact_name: 'payments-network-tfplan'
   secrets: inherit
-
-plan-payments-data:
-  if: github.event_name == 'pull_request'
-  needs: plan-payments-network
-  uses: ./.github/workflows/terraform-plan.yml
-  with:
-    working_directory: 'Workload/Spokes/payments/data'
-    tfvars_file: '../../../../Deployment/Spokes/payments/dev.tfvars'
-    state_key: 'spokes/payments/data.tfstate'
-    artifact_name: 'payments-data-tfplan'
-  secrets: inherit
-
-plan-payments-identity:
-  if: github.event_name == 'pull_request'
-  needs: plan-payments-data
-  uses: ./.github/workflows/terraform-plan.yml
-  with:
-    working_directory: 'Workload/Spokes/payments/identity'
-    tfvars_file: '../../../../Deployment/Spokes/payments/dev.tfvars'
-    state_key: 'spokes/payments/identity.tfstate'
-    artifact_name: 'payments-identity-tfplan'
-  secrets: inherit
-
-# Apply phase (mirror the pattern for apply-* jobs)
 ```
 
-**4. Update path filters:**
-
-```yaml
-on:
-  pull_request:
-    paths:
-      - 'Workload/Spokes/fintrack/**'
-      - 'Deployment/Spokes/fintrack/**'
-      - 'Workload/Spokes/payments/**'     # ← Add this
-      - 'Deployment/Spokes/payments/**'   # ← Add this
-```
-
-> **Note**: The `plan-network` and `plan-data` etc. jobs are specific to `fintrack`. If multiple spokes should run in parallel **within** their own sequential chains, you'd need separate job names per spoke. They can execute concurrently because they operate on different state files.
+**4. Update path filters** so the pipeline triggers on payments changes too.
 
 ---
 
-## 🌍 Adding a New Environment
-
-### Step-by-step: Adding "staging" for FinTrack
-
-**1. Create deployment config:**
-
-```text
-Deployment/Spokes/fintrack/staging.tfvars
-```
-
-With production-like values:
-```hcl
-region             = "sgp1"
-environment        = "staging"
-app_name           = "fintrack"
-state_bucket_name  = "fintrack-tfstate-bucket-staging"
-droplet_size       = "s-2vcpu-2gb"
-instance_count     = 2
-db_size_slug       = "db-s-2vcpu-2gb"
-db_node_count      = 2
-initial_database   = "fintrack_staging_store"
-```
-
-**2. Add pipeline trigger paths:**
-
-```yaml
-on:
-  pull_request:
-    paths:
-      - 'Deployment/Spokes/fintrack/staging.tfvars'  # ← Add
-```
-
-**3. (Optional) Create separate pipeline jobs for staging** — if you want staging deployments to run on push to a `staging` branch instead of `main`:
-
-```yaml
-on:
-  push:
-    branches: [staging]  # ← New trigger
-    paths:
-      - 'Workload/Spokes/fintrack/**'
-      - 'Deployment/Spokes/fintrack/staging.tfvars'
-```
-
----
-
-## 🔧 Troubleshooting CI/CD
+## 🔧 Troubleshooting: What I Broke and How I Fixed It
 
 ### Pipeline Doesn't Trigger
 
-**Symptoms**: Push a commit, no workflow runs.
+**Symptom**: Push code, no workflow runs.
 
 **Checklist**:
-1. ✅ Are the changed files under the watched paths? (Check `paths:` in pipeline YAML)
-2. ✅ Is the branch correct? (PR → `main`, push → `main`)
-3. ✅ Is GitHub Actions enabled for the repository?
-4. ✅ Are there any workflow syntax errors? (Check GitHub Actions tab)
+1. Are the changed files in the watched paths? (`Workload/Spokes/fintrack/**`)
+2. Is the branch correct? PR → main, push → main
+3. Is GitHub Actions enabled for the repo?
+4. Any workflow syntax errors? Check the GitHub Actions tab
 
 ### Plan Job Fails — "No works found"
 
-**Symptom**: `terraform plan` runs but shows "No changes" when changes were expected.
+I spent 20 minutes debugging this once. The `tfvars_file` path is **relative to the working directory**, not the repo root:
 
-**Cause**: The `tfvars_file` path is relative to the `working_directory`, not the repository root.
 ```yaml
-# Correct:
+# From Workload/Spokes/fintrack/network, go up 4 levels to find dev.tfvars:
 tfvars_file: '../../../../Deployment/Spokes/fintrack/dev.tfvars'
-# (Relative path from Workload/Spokes/fintrack/network → root → Deployment/...)
 ```
 
-### Plan Job Fails — "Backend initialization required"
+Count the directories: `Workload/Spokes/fintrack/network` → up to `Workload/Spokes/fintrack` → up to `Workload/Spokes` → up to `Workload` → up to root → then down to `Deployment/Spokes/fintrack/dev.tfvars`. That's `../../../../`.
 
-**Symptom**: Terraform can't find the backend configuration.
+### Init Hangs Forever
 
-**Fix**: Check that all 5 `-backend-config` parameters are present:
-- `bucket`
-- `endpoint`
-- `key`
-- `access_key`
-- `secret_key`
-- `region` (the dummy fix)
+**Fix**: Add `-backend-config="region=us-east-1"`. See the Headless Init Fix section above.
 
-And that `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables are set.
-
-### Apply Job Fails — "Plan file was created by a different process"
-
-**Symptom**: The downloaded plan binary can't be applied.
+### Apply Fails — "Plan file was created by a different process"
 
 **Causes**:
-1. Someone force-pushed to `main` between the PR plan and merge
+1. Someone force-pushed to `main` between plan and merge
 2. The plan artifact expired (1-day retention)
 3. The workflow was re-run from a different commit
 
 **Fix**: Close and re-open the PR (or push a new commit) to generate a fresh plan.
 
-### Apply Job Fails — "Resource already exists"
+### Apply Fails — "Resource already exists"
 
-**Symptom**: Terraform tries to create a resource that already exists.
+**Cause**: Someone ran `terraform apply` manually, or created resources via the DO console. State drift.
 
-**Cause**: State drift — the Spaces state file doesn't match the actual DigitalOcean resources. Someone ran `terraform apply` manually, or resources were created through the DigitalOcean console.
-
-**Fix**: Import the existing resource into the state:
+**Fix**: Import the existing resource into state:
 ```bash
 terraform import digitalocean_vpc.network <vpc-id>
 ```
 
-### Secret Missing Error
+### Secret Missing — `__${{ secrets.DO_SPACES_BUCKET }}__`
 
-**Symptom**: `Error: __${{ secrets.DO_SPACES_BUCKET }}__` appears in logs.
+Literally the raw template string appears in logs.
 
-**Fix**: Check GitHub repository → Settings → Secrets and variables → Actions. Ensure all required secrets are defined.
+**Fix**: Check GitHub → Settings → Secrets and variables → Actions. Make sure `DO_SPACES_BUCKET` is defined.
 
 ---
 
-## 🔒 Security in the Pipeline
+## 🔒 Security: What the Pipeline Can Access
 
-### What the Pipeline Has Access To
+The pipeline runs with GitHub Actions' permissions plus secrets:
 
-The pipeline runs with GitHub Actions' default permissions plus the secrets it inherits:
-
-| Permission | Scope | Used For |
-|-----------|-------|---------|
-| Read repository code | This repo | `actions/checkout` |
-| Write workflow artifacts | This run | Upload/download plan binaries |
-| DigitalOcean API (via token) | DigitalOcean account | Create/modify infrastructure |
-| Spaces API (via keys) | Specific Spaces bucket | Read/write state files |
+| Permission | Scope |
+|-----------|-------|
+| Read repository code | This repo |
+| Write workflow artifacts | This workflow run |
+| DigitalOcean API | Full access (via `DIGITALOCEAN_TOKEN`) |
+| Spaces API | Read/write to your bucket (via access keys) |
 
 ### Secret Protection
 
-1. **Secrets are never printed** — GitHub Actions automatically masks secret values in logs
-2. **Secrets are never in code** — No `.tfvars` contains API keys; no `variables.tf` references secrets
-3. **Secrets are scoped** — `DIGITALOCEAN_TOKEN` can be scoped to read-write on specific resources
-4. **Reusable workflows inherit, not redeclare** — Secrets flow through `secrets: inherit` without being duplicated
+1. **Secrets are never printed** — GitHub Actions automatically masks them in logs
+2. **Secrets are never in code** — No `.tfvars` contains API keys
+3. **Reusable workflows inherit, not redeclare** — `secrets: inherit` passes all secrets without duplicating them
 
-### Least Privilege for the Token
+### Least Privilege Tip
 
-The DigitalOcean token should have (at minimum):
-- **Write** access to: Droplets, Databases, VPCs, Firewalls, Projects, Spaces
-- **Read** access to: Account, Billing (for cost tracking)
-
-> Create a **project-scoped** token in DigitalOcean if possible, limiting the token's blast radius to just the FinTrack project resources.
+Create a **project-scoped** DigitalOcean token that only has access to the resources in this project. That way, even if the token leaks, the blast radius is limited.
 
 ---
 
-## 📚 Related Documents
+## 📚 Related Docs
 
-| Document | Description |
-|----------|-------------|
-| [README.md](../readme.md) | Project overview and quick start |
-| [architecture.md](architecture.md) | Architecture deep dive |
-| [reference-architecture.md](reference-architecture.md) | Enterprise reference patterns |
-| [best-practices.md](best-practices.md) | Engineering standards and guidelines |
+| Document | What It Covers |
+|----------|---------------|
+| [README.md](../readme.md) | Project overview, what I learned, getting started |
+| [architecture.md](architecture.md) | Hub-and-spoke, state bridges, module design |
+| [reference-architecture.md](reference-architecture.md) | Ways to extend: multi-spoke, multi-region, cost estimates |
+| [best-practices.md](best-practices.md) | Lessons learned the hard way |

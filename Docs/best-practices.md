@@ -1,56 +1,54 @@
-# Best Practices
+# Best Practices — Lessons I Learned the Hard Way 🛠️
 
-> **Audience**: All contributors — developers, DevOps engineers, platform engineers, and reviewers. These practices ensure the repository remains maintainable, secure, and consistent.
+> **Every rule in this doc is here because I broke it, regretted it, and fixed it.** If you're learning Terraform and IaC, this is the stuff I wish someone had told me before I started.
 
 ---
 
 ## Table of Contents
 
-- [Infrastructure as Code Standards](#-infrastructure-as-code-standards)
-- [Repository Hygiene](#-repository-hygiene)
-- [Terraform Module Design](#-terraform-module-design)
-- [State Management](#-state-management)
-- [Secrets & Security](#-secrets--security)
-- [CI/CD Pipeline Standards](#-cicd-pipeline-standards)
-- [Code Review Guidelines](#-code-review-guidelines)
-- [Naming Conventions](#-naming-conventions)
-- [Error Handling & Resilience](#-error-handling--resilience)
-- [Documentation Standards](#-documentation-standards)
-- [Operational Runbooks](#-operational-runbooks)
+- [Infrastructure as Code: What I Wish I Knew](#-infrastructure-as-code-what-i-wish-i-knew)
+- [Repository Hygiene: Keep It Clean](#-repository-hygiene-keep-it-clean)
+- [Module Design: Don't Make My Mistakes](#-module-design-dont-make-my-mistakes)
+- [State Management: Handle With Care](#-state-management-handle-with-care)
+- [Secrets & Security: What I Almost Committed](#-secrets--security-what-i-almost-committed)
+- [CI/CD Pipeline: Rules I Now Live By](#-cicd-pipeline-rules-i-now-live-by)
+- [Code Review Checklist (For Terraform PRs)](#-code-review-checklist-for-terraform-prs)
+- [Naming Conventions: Pick One and Stick to It](#-naming-conventions-pick-one-and-stick-to-it)
+- [Operational Runbooks: What I Do Daily/Weekly](#-operational-runbooks-what-i-do-dailyweekly)
+- [Environment Cleanup: How to Tear Down Safely](#-environment-cleanup-how-to-tear-down-safely)
 
 ---
 
-## 📐 Infrastructure as Code Standards
+## 🏗️ Infrastructure as Code: What I Wish I Knew
 
-### 1. Always Use `terraform fmt`
+### 1. `terraform fmt` Is Not Optional
 
-Every Terraform file must be formatted with `terraform fmt` before committing. This ensures consistent indentation, alignment, and syntax spacing.
+I used to skip formatting. "It works, who cares about spaces?" Then CI started rejecting my PRs. Then I had to review my own messy code. Now I run this constantly:
 
 ```bash
-# Format all Terraform files recursively
 terraform fmt -recursive
-
-# CI also checks this:
-# name: Terraform Format Check
-# run: terraform fmt -check
 ```
 
-> ⚠️ If `terraform fmt -check` fails in CI, the plan job fails. Fix formatting and push again.
+Do it before every commit. The `-check` flag in CI will reject unformatted code, so just get in the habit.
 
-### 2. One Resource Type Per File (Logical Grouping)
+> ⚠️ **Lesson**: If `terraform fmt -check` fails in CI, the entire plan job fails. You waste 2 minutes of CI time for a missing space.
 
-| File | Contents |
-|------|----------|
-| `main.tf` | Module calls and primary resource definitions |
-| `variables.tf` | All input variable declarations |
-| `outputs.tf` | All output value declarations |
-| `data.tf` | `terraform_remote_state` data sources |
-| `providers.tf` | Provider and Terraform version constraints |
-| `backend.tf` | State backend configuration (partial) |
+### 2. Follow the Six-File Pattern
 
-> **Exception**: Small modules (like `Modules/firewall`) may combine resources in `main.tf` since there's only one resource type.
+Every workload directory should have exactly these files:
 
-### 3. Pin Provider and Terraform Versions
+| File | Purpose |
+|------|---------|
+| `providers.tf` | Terraform version & provider config |
+| `backend.tf` | State storage config (partial) |
+| `variables.tf` | Input variables |
+| `data.tf` | Remote state reads |
+| `main.tf` | Module calls |
+| `outputs.tf` | Exposed values |
+
+Why? Because after the 5th time looking for where variables are defined, you'll appreciate consistency. Every directory looks the same. No surprises.
+
+### 3. Pin Your Versions
 
 ```hcl
 # providers.tf
@@ -59,160 +57,136 @@ terraform {
   required_providers {
     digitalocean = {
       source  = "digitalocean/digitalocean"
-      version = "~> 2.39.0"  # ← Pin major.minor, allow patch
+      version = "~> 2.39.0"  # ← Major.minor pinned, patch updates allowed
     }
   }
 }
 ```
 
-- Pinning prevents unexpected behavior from provider upgrades
-- `~> 2.39.0` means `>= 2.39.0` and `< 2.40.0` — safe patch updates only
-- Review provider version bumps separately via PR
+Without pinning, a provider update can change behavior unexpectedly. `~> 2.39.0` means "any version from 2.39.0 up to but not including 2.40.0" — safe patch updates only.
 
-### 4. Use Descriptive Variable Descriptions
+### 4. Write Descriptions for Every Variable
 
 ```hcl
-# ✅ Good
+# ✅ Good — I know exactly what this is for
 variable "private_network_uuid" {
   type        = string
   description = "The private VPC network identifier where this database cluster will be isolated."
 }
 
-# ❌ Bad
+# ❌ Bad — I wrote this at 2am and now I have no idea
 variable "network" {
   type = string
 }
 ```
 
-Descriptions become documentation in `terraform plan` output and generated docs.
+Descriptions show up in `terraform plan` output and in generated docs. Your future self will thank you.
 
-### 5. Set Sensible Defaults
+### 5. Defaults Should Be Dev-Friendly
 
 ```hcl
-# ✅ Good — defaults for dev environment
 variable "node_count" {
   type        = number
   description = "Number of database nodes. Use 1 for dev, 3 for production HA."
-  default     = 1
-}
-
-variable "size_slug" {
-  type        = string
-  description = "Engine size for DB cluster nodes."
-  default     = "db-s-1vcpu-1gb"
+  default     = 1  # ← Cheap by default, override for production
 }
 ```
 
-Defaults should be **development-friendly** — production overrides them explicitly.
+Someone cloning the repo should be able to run `terraform apply` and get a working dev environment without passing a single variable.
 
 ---
 
-## 🧹 Repository Hygiene
+## 🧹 Repository Hygiene: Keep It Clean
 
-### 1. Path Structure Consistency
-
-Every workload directory must follow the **six-file pattern**:
-
-```
-Workload/{Layer}/{app-name}/
-├── backend.tf       # backend "s3" {} — partial
-├── providers.tf     # Version constraints + provider config
-├── variables.tf     # Input variables
-├── data.tf          # Remote state data sources
-├── main.tf          # Module calls
-└── outputs.tf       # Exposed outputs
-```
-
-### 2. Never Commit State Files or Plans
+### 1. Never Commit State Files or Plans
 
 ```gitignore
-# .gitignore — already configured
 *.tfstate
 *.tfstate.backup
 *.tfplan
 .terraform/
 ```
 
-State files contain **sensitive information** (resource IDs, IPs, possibly secrets). Plans contain **execution snapshots** that can be large and change rapidly. Neither belongs in Git.
+**Why?** State files contain sensitive info (resource IDs, IPs, sometimes secrets). Plans are large binaries that change constantly. Neither belongs in Git.
 
-### 3. Keep `.tfvars` Out of Git (if they contain secrets)
+### 2. Keep `.tfvars` Out... But Not ALL of Them
 
-The current `.gitignore` does **not** exclude `.tfvars` files. This is **by design** — our `.tfvars` files (in `Deployment/`) contain **only** non-sensitive configuration values like instance counts and region names.
+Our `.tfvars` files (in `Deployment/`) contain only non-sensitive values like instance counts and region names. They're safe to commit.
 
-> If any `.tfvars` file ever needs to contain a secret value, add `*.tfvars` to `.gitignore` and switch to a secrets management solution.
+**But** — if any `.tfvars` file ever needs to contain a secret value (like a database password), add `*.tfvars` to `.gitignore` immediately and switch to a secrets manager.
 
-### 4. Commit Messages Follow Conventional Commits
+### 3. Use Conventional Commits
 
-| Prefix | Usage | Example |
-|--------|-------|---------|
-| `feat:` | New module, resource, or feature | `feat: add autoscaling module for droplets` |
-| `fix:` | Bug fix | `fix: correct firewall outbound port range` |
-| `refactor:` | Code change without behavior change | `refactor: extract common variables into locals` |
-| `docs:` | Documentation only | `docs: add architecture diagram to readme` |
-| `chore:` | Tooling, CI/CD, non-infra | `chore: update Terraform version to 1.6.0` |
-| `infra:` | Infrastructure scaffolding | `infra: add spoke directory for payment-service` |
+| Prefix | When to Use | Example |
+|--------|------------|---------|
+| `feat:` | New module, resource, or feature | `feat: add autoscaling module` |
+| `fix:` | Bug fix | `fix: correct firewall outbound port` |
+| `refactor:` | No behavior change | `refactor: extract common variables` |
+| `docs:` | Documentation only | `docs: add architecture diagram` |
+| `chore:` | Tooling, CI/CD | `chore: update Terraform to 1.6.0` |
+
+> 📝 **I didn't do this from the start**, and now I have commit history that says "fix stuff" and "update." Don't be like me.
 
 ---
 
-## 📦 Terraform Module Design
+## 📦 Module Design: Don't Make My Mistakes
 
-### 1. Single Responsibility
+### 1. One Module = One Thing
 
-Each module should do **one thing** and do it well:
-
-| ✅ Correct | ❌ Incorrect |
-|-----------|-------------|
+| ✅ Correct | ❌ Wrong |
+|-----------|---------|
 | `Modules/droplet` — creates droplets | `Modules/compute` — creates droplets + firewalls + DNS |
 | `Modules/firewall` — creates firewall rules | `Modules/security` — creates firewall + projects + SSH keys |
-| `Modules/networking` — creates VPC | `Modules/network` — creates VPC + subnets + VPN + peering |
 
-### 2. Clean Interface Contracts
+A module that does one thing is easy to test, reuse, and reason about. A module that does everything is a maintenance nightmare.
+
+### 2. Clean Input Contracts
 
 ```hcl
-# A module interface should be minimal and clear:
-
-# ✅ Good: minimum viable inputs
+# ✅ Good — minimum viable inputs
 variable "vpc_name"  { type = string }
 variable "region"    { type = string }
 variable "cidr_range" { type = string }
 
-# ❌ Bad: over-specified inputs that limit reusability
-variable "vpc_name"  { type = string }
-variable "region"    { type = string }
-variable "cidr_range" { type = string }
-variable "environment" { type = string }          # Unused — module shouldn't care
-variable "tags"       { type = map(string) }      # Unused in the resource
-variable "description" { type = string }          # DCO VPC doesn't have descriptions
+# ❌ Bad — too many inputs that the module doesn't even use
+variable "vpc_name"      { type = string }
+variable "region"        { type = string }
+variable "cidr_range"    { type = string }
+variable "environment"   { type = string }   # ← Unused!
+variable "tags"          { type = map(string) }  # ← Unused!
 ```
 
-### 3. Output What's Needed — No More, No Less
+Don't add variables "just in case." Add them when you need them.
+
+### 3. Output Only What's Needed Downstream
 
 ```hcl
-# ✅ Good: output only what downstream layers need
+# ✅ Good — only what downstream layers need
 output "vpc_id" {
   value       = digitalocean_vpc.network.id
   description = "The unique network identifier passed to downstream compute grids."
 }
 
-# ❌ Bad: over-exposing module internals
-output "vpc_id"    { value = digitalocean_vpc.network.id }
-output "vpc_self_link" { value = "..." }       # Not needed by any consumer
-output "vpc_create_time" { value = "..." }     # Not actionable
+# ❌ Bad — exposing internals
+output "vpc_self_link"    { value = "..." }   # Nobody uses this
+output "vpc_create_time"  { value = "..." }   # Not actionable
 ```
 
-### 4. Don't Hardcode Environment-Specific Values in Modules
+**My specific lesson**: I originally only output `vpc_id` from the networking module. But the Identity layer needed `vpc_urn` for project resource binding. I had to add a second output later. Think about who consumes your outputs.
+
+### 4. Don't Hardcode Environment Values in Modules
 
 ```hcl
-# ✅ Good: environment is a variable
+# ✅ Good — environment is a variable passed by the caller
 resource "digitalocean_database_cluster" "mongodb_cluster" {
-  size  = var.size_slug           # ← Decided by the caller
+  size  = var.size_slug
   tags  = ["database", var.environment]
 }
 
-# ❌ Bad: hardcoded to dev
+# ❌ Bad — hardcoded to dev, fails in production
 resource "digitalocean_database_cluster" "mongodb_cluster" {
-  size  = "db-s-1vcpu-1gb"       # ← Can't change without editing module
-  tags  = ["database", "dev"]    # ← Wrong in production
+  size  = "db-s-1vcpu-1gb"   # ← Can't change without editing the module
+  tags  = ["database", "dev"]  # ← Wrong in production!
 }
 ```
 
@@ -220,80 +194,84 @@ resource "digitalocean_database_cluster" "mongodb_cluster" {
 
 ```hcl
 resource "digitalocean_droplet" "vm" {
-  tags = var.tags  # ← Pass tags from caller
+  tags = var.tags
 }
 ```
 
 Tags should include at minimum:
-- Application name (`fintrack`, `payment-service`)
+- Application name (`fintrack`, `payments`)
 - Environment (`dev`, `staging`, `prod`)
 - Any team or cost-center identifiers
 
 ---
 
-## 🔐 State Management
+## 🔐 State Management: Handle With Care
 
 ### 1. One State Per Layer
 
-| ❌ Anti-Pattern | ✅ Best Practice |
+| ❌ What Not to Do | ✅ What to Do |
 |---|---|
 | One state file for everything | Separate state per layer |
 | `terraform.tfstate` in Git | State in DigitalOcean Spaces |
-| Workspaces as environment separation | Separate Spaces key paths |
+| Workspaces for environment separation | Separate Spaces key paths |
 
-### 2. Always Use Partial Backend Configuration
+### 2. Always Use Partial Backend Config
 
 ```hcl
-# backend.tf — DO NOT fill in values here
+# backend.tf — Keep this EMPTY
 terraform {
-  backend "s3" {}  # ← Empty — config injected at init time
+  backend "s3" {}  # ← No values here!
 }
 ```
 
-This keeps bucket names, keys, and credentials **out of the codebase**.
+Bucket names, keys, and credentials are injected at `terraform init` time via CLI flags. Nothing sensitive in the codebase.
 
-### 3. Pass Backend Config via Flags, Not Files
+### 3. Pass Backend Config via CLI, Not Files
 
 ```bash
-# ✅ Good: CLI flags (current approach)
+# ✅ Good — current approach
 terraform init \
   -backend-config="bucket=${{ secrets.DO_SPACES_BUCKET }}" \
   -backend-config="key=spokes/fintrack/network.tfstate"
 
-# ❌ Bad: backend config file committed
-terraform init -backend-config=backend-config.hcl   # ← commits secrets
+# ❌ Bad — commits secrets to repo
+terraform init -backend-config=backend-config.hcl
 ```
 
-### 4. Include the Dummy Region Flag
+### 4. Always Include the Dummy Region
 
-Every `terraform init` command that configures the DigitalOcean Spaces backend **must** include:
+Every `terraform init` with DigitalOcean Spaces MUST include:
 
 ```bash
 -backend-config="region=us-east-1"
 ```
 
-This satisfies the AWS S3 SDK validation without affecting Spaces connectivity.
+This satisfies the AWS S3 SDK's internal validation. Without it, `terraform init` hangs in CI (learned that one the hard way — see the [ci-cd-pipeline.md](ci-cd-pipeline.md) for the full saga).
 
 ### 5. Never Manually Edit State Files
 
-- State files are **internal Terraform data** — editing them breaks Terraform's ability to manage resources
-- If state needs fixing, use `terraform state mv`, `terraform state rm`, or `terraform import`
-- For major state surgery, work on a backup copy first
+State files are binary data. Editing them breaks Terraform's ability to manage resources. If you need to fix state:
 
-### 6. Regular State Backup
+| Command | What It Does |
+|---------|-------------|
+| `terraform state mv` | Rename or move a resource in state |
+| `terraform state rm` | Remove a resource from state (without destroying it) |
+| `terraform import` | Add an existing resource to state |
 
-Enable **object versioning** on the Spaces bucket. This provides:
+### 6. Enable Spaces Versioning on Your Bucket
+
+This is a checkbox in the DigitalOcean Spaces settings. It gives you:
 - Automatic backup on every state write
 - Point-in-time recovery if state gets corrupted
-- Audit trail of state changes
+- Audit trail of every state change
 
 ---
 
-## 🔒 Secrets & Security
+## 🔒 Secrets & Security: What I Almost Committed
 
 ### 1. Zero Secrets in Code
 
-| ❌ Never Commit | ✅ Instead |
+| ❌ Never Commit | ✅ Do This Instead |
 |---|---|
 | `DIGITALOCEAN_TOKEN = "dop_v1_..."` | Store in GitHub Secrets, pass as env var |
 | `access_key = "DO00ABC123"` | Inject via `-backend-config` at runtime |
@@ -302,8 +280,8 @@ Enable **object versioning** on the Spaces bucket. This provides:
 ### 2. Use Environment Variables for Provider Auth
 
 ```hcl
-# providers.tf
-provider "digitalocean" {}  # ← Reads DIGITALOCEAN_TOKEN from env
+# providers.tf — no token here
+provider "digitalocean" {}  # ← Reads DIGITALOCEAN_TOKEN from environment
 ```
 
 ```yaml
@@ -314,50 +292,41 @@ env:
 
 ### 3. Least Privilege for Tokens
 
-The DigitalOcean token should have only the permissions it needs:
+Create a **project-scoped** DigitalOcean token (not a full account token) that can only access:
+- The resources in your project
+- Spaces (for state storage)
 
-- **Droplets**: Create, read, update, delete
-- **Databases**: Create, read, update, delete
-- **VPC**: Create, read, update, delete
-- **Firewalls**: Create, read, update, delete
-- **Projects**: Create, read, update, delete
-- **Spaces**: Read, write (for state storage only)
+**Rotate tokens every 90 days.** Set a calendar reminder.
 
-> In DigitalOcean, create a **project-scoped token** rather than a full-account token when possible.
-
-### 4. Firewall Best Practices
+### 4. Firewall: Restrict SSH in Production
 
 ```hcl
-# Production: Restrict SSH to VPN/CIDR
+# Dev: 0.0.0.0/0 is fine for learning
+# Production: Restrict to your VPN
 inbound_rule {
   protocol         = "tcp"
   port_range       = "22"
-  source_addresses = ["10.0.0.0/8", "203.0.113.0/24"]  # ← VPN range
+  source_addresses = ["10.0.0.0/8", "203.0.113.0/24"]  # ← Your VPN range
 }
-
-# Production: Drop HTTP, force HTTPS
-# (Don't include port 80 in production if you redirect at the app level)
 ```
 
-### 5. Never Use Root Tokens
+### 5. Database: Private Network Only
 
-- Create a **dedicated service account** for CI/CD in DigitalOcean
-- Use **project-scoped tokens** not full account tokens
-- Rotate tokens **every 90 days** (set a calendar reminder)
+Already enforced in this project — the MongoDB cluster has no public endpoint. This is non-negotiable for anything beyond a sandbox.
 
 ---
 
-## 🔄 CI/CD Pipeline Standards
+## 🔄 CI/CD Pipeline: Rules I Now Live By
 
-### 1. Plan-Apply Separation is Non-Negotiable
+### 1. Plan-Apply Split is Non-Negotiable
 
-| Phase | When | What | Who Sees Output |
-|-------|------|------|----------------|
-| Plan | On PR | `terraform plan -out=tfplan` | PR reviewers |
-| Apply | On merge | `terraform apply tfplan` | Pipeline logs |
+| Phase | When | What |
+|-------|------|------|
+| Plan | On PR | `terraform plan -out=tfplan` → upload artifact |
+| Apply | On merge to main | `terraform apply tfplan` using the exact same binary |
 
-- **Never** combine plan and apply in a single step
-- **Never** allow direct `terraform apply` from local machines for shared environments
+- **Never** combine plan and apply in one step
+- **Never** run `terraform apply` from your local machine for shared environments
 
 ### 2. Always Upload Plans as Artifacts
 
@@ -370,32 +339,31 @@ inbound_rule {
     retention-days: 1
 ```
 
-The plan binary ensures that **what was reviewed is what gets applied**.
+The plan binary guarantees that **what was reviewed is what gets applied**.
 
-### 3. Sequential Job Dependencies
+### 3. Sequential Jobs for Dependent Layers
 
 ```yaml
-jobs:
-  plan-network:
-    # ...
-  plan-data:
-    needs: plan-network  # ← Required
-  plan-identity:
-    needs: plan-data     # ← Required
+plan-network:
+  # ...
+plan-data:
+  needs: plan-network    # ← REQUIRED
+plan-identity:
+  needs: plan-data       # ← REQUIRED
 ```
 
-Parallel execution of dependent layers causes **guaranteed failures** because the upstream state won't exist yet.
+Running dependent layers in parallel causes guaranteed failures because upstream state doesn't exist yet.
 
-### 4. Use `secrets: inherit` for Reusable Workflows
+### 4. Use `secrets: inherit`
 
 ```yaml
 jobs:
   plan-network:
     uses: ./.github/workflows/terraform-plan.yml
-    secrets: inherit  # ← Passes all repository secrets automatically
+    secrets: inherit  # ← Passes all repo secrets automatically
 ```
 
-This is cleaner than redeclaring each secret in the `workflow_call` inputs.
+Cleaner than redeclaring each secret in `workflow_call` inputs.
 
 ### 5. Path-Trigger Only What's Needed
 
@@ -403,69 +371,66 @@ This is cleaner than redeclaring each secret in the `workflow_call` inputs.
 on:
   pull_request:
     paths:
-      - 'Workload/Spokes/fintrack/**'      # Only trigger on spoke changes
+      - 'Workload/Spokes/fintrack/**'
       - 'Deployment/Spokes/fintrack/**'
-      - '.github/workflows/**'              # Also trigger on pipeline changes
 ```
 
-Don't trigger the full pipeline when editing `Docs/`, `README.md`, or other non-infrastructure files.
+Don't trigger the pipeline for `Docs/` or `README.md` changes. I wasted hours watching pipeline runs for documentation typos.
 
 ---
 
-## 👁️ Code Review Guidelines
+## 👁️ Code Review Checklist (For Terraform PRs)
 
-### Checklist for Reviewers
-
-When reviewing a Terraform PR, check:
+When reviewing a Terraform PR (even your own), check:
 
 **Correctness**
-- [ ] Does the `plan` output match what the PR description says should happen?
-- [ ] Are there any unexpected resource **destructions**? (Look for `-` signs in the plan)
-- [ ] Are the variable types correct? (string vs number vs list)
-- [ ] Are dependencies correctly ordered via `needs:` in CI?
+- [ ] Does the `plan` output match what the PR says should happen?
+- [ ] Any unexpected resource **destructions**? (Look for `-` signs in the plan)
+- [ ] Are variable types correct? (string vs number vs list)
+- [ ] Are `needs:` dependencies correctly ordered?
 
 **Security**
-- [ ] Are there any hardcoded secrets or tokens?
-- [ ] Are firewall rules appropriately restrictive? (No `0.0.0.0/0` for SSH in production)
-- [ ] Is the database on a private network (no public endpoint)?
-- [ ] Are secrets passed via environment variables or GitHub Secrets (not in code)?
+- [ ] Any hardcoded secrets or tokens?
+- [ ] Are firewall rules appropriately restrictive?
+- [ ] Is the database on a private network?
+- [ ] Are secrets passed via env vars, not in code?
 
 **Consistency**
-- [ ] Does the code follow the six-file pattern? (main, variables, outputs, data, providers, backend)
-- [ ] Has `terraform fmt -recursive` been run?
-- [ ] Are naming conventions followed? (kebab-case for most things)
-- [ ] Are variable descriptions informative?
+- [ ] Six-file pattern followed? (main, variables, outputs, data, providers, backend)
+- [ ] `terraform fmt -recursive` has been run?
+- [ ] Naming conventions followed?
+- [ ] Variable descriptions are informative?
 
 **Architecture**
 - [ ] Does the change respect layer boundaries? (Network doesn't touch data state, etc.)
 - [ ] Are modules reused rather than duplicated?
 - [ ] Are environment-specific values in `.tfvars` (not hardcoded)?
 
-### Common Code Review Comments
+### Common Review Comments I Give Myself
 
-| Issue | Comment |
-|-------|---------|
-| Missing `terraform fmt` | "Please run `terraform fmt -recursive` and recommit." |
-| Hardcoded value | "This value should go in `dev.tfvars` instead of being hardcoded." |
-| Missing variable description | "Please add a description to this variable." |
-| Overly complex module | "This module does too much. Consider splitting into smaller modules." |
-| Direct resource instead of module | "We have a module for this in `Modules/`. Please reuse it." |
-| State key wrong | "The state key should be `spokes/fintrack/network.tfstate`, not `network.tfstate`." |
-| Unnecessary whitespace change | "Please revert formatting changes in unrelated files." |
+| Issue | Comment I Write |
+|-------|----------------|
+| Missing `terraform fmt` | "Run `terraform fmt -recursive` and recommit." |
+| Hardcoded value | "This goes in `.tfvars`, not hardcoded." |
+| Missing variable description | "Add a description to this variable." |
+| Module does too much | "This module should do one thing. Split it up." |
+| Direct resource instead of module | "We have a module for this in `Modules/`. Reuse it." |
 
 ---
 
-## 🏷️ Naming Conventions
+## 🏷️ Naming Conventions: Pick One and Stick to It
+
+I standardized on these after 3 refactors. Pick a convention and DON'T change it mid-project.
 
 ### Resource Naming
 
-| Resource Type | Pattern | Example |
-|--------------|---------|---------|
-| VPC | `{project}-{environment}-vpc` | `fintrack-dev-vpc` |
-| Droplet | `{app}-{environment}` or `{app}-{environment}-node-{n}` | `fintrack-dev` or `fintrack-dev-node-1` |
-| Firewall | `{app}-{environment}-firewall` | `fintrack-dev-firewall` |
-| DB Cluster | `{app}-{environment}-{engine}` | `fintrack-dev-mongodb` |
-| Project (DO) | `{App}-{Environment}-Workspace` | `FinTrack-Dev-Workspace` |
+| Resource | Pattern | Example |
+|----------|---------|---------|
+| VPC | `{project}-{env}-vpc` | `fintrack-dev-vpc` |
+| Droplet | `{app}-{env}` or `{app}-{env}-node-{n}` | `fintrack-dev` or `fintrack-dev-node-1` |
+| Firewall | `{app}-{env}-firewall` | `fintrack-dev-firewall` |
+| DB Cluster | `{app}-{env}-{engine}` | `fintrack-dev-mongodb` |
+| Project (DO) | `{App}-{Env}-Workspace` | `FinTrack-Dev-Workspace` |
 
 ### File & Directory Naming
 
@@ -474,15 +439,12 @@ When reviewing a Terraform PR, check:
 | Directories | `kebab-case` | `Workload/Spokes/fintrack/` |
 | Module dirs | `snake_case` | `Modules/data/mongo_db/` |
 | Terraform files | `snake_case` | `main.tf`, `variables.tf` |
-| Pipeline files | `kebab-case` | `terraform-plan.yml` |
 | Variable names | `snake_case` | `droplet_size`, `instance_count` |
-| Output names | `snake_case` | `hub_vpc_id`, `droplet_urns` |
 | State keys | `kebab-case` | `spokes/fintrack/network.tfstate` |
-| Artifact names | `kebab-case` | `fintrack-network-tfplan` |
 
 ### Git Branch Naming
 
-```text
+```
 feature/{description}       → feature/add-autoscaling
 fix/{description}           → fix/firewall-ssh-port
 chore/{description}         → chore/update-terraform-version
@@ -491,90 +453,9 @@ docs/{description}          → docs/add-contributing-guide
 
 ---
 
-## 🛡️ Error Handling & Resilience
+## 🏃 Operational Runbooks: What I Do Daily/Weekly
 
-### Terraform Error Prevention
-
-| Practice | Why |
-|----------|-----|
-| `terraform validate` in CI | Catches syntax errors before plan |
-| `terraform plan -out=tfplan` | Creates a deterministic execution plan |
-| `-input=false` in apply | Prevents interactive prompts in CI |
-| `terraform fmt -check` | Ensures consistent formatting |
-
-### Handling Apply Failures
-
-If `terraform apply` fails mid-way:
-
-```bash
-# 1. Check what was created and what failed
-# 2. Fix the issue (e.g., quota exceeded, naming conflict)
-# 3. Re-run: terraform apply (Terraform picks up from where it left off)
-# 4. If state is locked: terraform force-unlock <lock-id>
-```
-
-> Terraform is **idempotent** — re-running apply after a partial failure will continue from the last successful resource.
-
-### Avoiding Race Conditions
-
-State isolation prevents most race conditions, but these patterns help:
-
-1. **Never run two applies on the same state file simultaneously** — they'll conflict
-2. **Use CI/CD for all applies** — no concurrent manual applies
-3. **Monitor for state lock errors** (even though Spaces doesn't natively lock, Git's branch protection prevents simultaneous merges)
-
----
-
-## 📝 Documentation Standards
-
-### What Must Be Documented
-
-| Item | Where | Detail Level |
-|------|-------|-------------|
-| Module purpose | Module `README.md` or inline comments | High-level: what and why |
-| Variable descriptions | `variables.tf` `description` fields | One sentence per variable |
-| Output descriptions | `outputs.tf` `description` fields | What this output provides |
-| Module call intent | `main.tf` comments | Why this module is called with these params |
-| Pipeline workflow | CI/CD YAML comments | What each job does and why order matters |
-| Architecture decisions | `Docs/` markdown files | Full context, decision, consequences |
-
-### Comment Style Guide
-
-```hcl
-# ✅ Good: explains WHY (not what)
-# Using remote state instead of module output to prevent
-# circular dependencies between hub and spoke layers.
-data "terraform_remote_state" "core_network" {
-  # ...
-}
-
-# ❌ Bad: explains WHAT (obvious from code)
-# This reads the core network remote state
-data "terraform_remote_state" "core_network" {
-  # ...
-}
-```
-
-### README Standards
-
-Every major directory should have a brief documentation comment:
-
-```markdown
-# Modules/
-
-Reusable Terraform building blocks for DigitalOcean infrastructure.
-
-Each module follows the standard interface:
-- `main.tf` — Resource definitions
-- `variables.tf` — Input contracts
-- `outputs.tf` — Output contracts
-```
-
----
-
-## 🏃 Operational Runbooks
-
-### Daily Operations
+### Daily
 
 ```bash
 # Check pipeline status
@@ -583,11 +464,11 @@ Each module follows the standard interface:
 # Check plan output for open PRs
 # → PR page → Checks tab → Terraform Plan step
 
-# Verify infrastructure is healthy
+# Quick infrastructure health check
 # → DigitalOcean dashboard
 ```
 
-### Weekly Operations
+### Weekly
 
 ```bash
 # Review DigitalOcean billing for unexpected costs
@@ -602,51 +483,50 @@ Each module follows the standard interface:
 
 ### Incident Response
 
-| Incident | Detection | Response |
-|----------|-----------|----------|
-| Apply failure | CI job failure notification | Check logs, fix code, re-run |
-| Resource accidentally deleted | User reports outage | Check state + apply to recreate |
-| State file corrupted | Terraform errors | Restore from Spaces versioning |
-| Security breach | DO alert / GitHub alert | Rotate tokens, audit changes |
-| High costs | Billing alert | Review resources, downsize if needed |
+| Incident | What I Do |
+|----------|-----------|
+| Apply failure | Check logs, fix code, re-run |
+| Resource deleted by accident | Check state + apply to recreate |
+| State file corrupted | Restore from Spaces versioning |
+| High costs | Review resources, downsize if needed |
 
-### Environment Cleanup
+---
 
-To tear down a complete environment (e.g., dev at end of sprint):
+## 🧹 Environment Cleanup: How to Tear Down Safely
+
+Destroy order matters. **Always destroy in reverse order of creation:**
 
 ```bash
-# Destroy in REVERSE order of creation:
-
-# 1. Spoke Identity (project binding)
+# Step 1: Spoke Identity (project binding — no resources, just references)
 cd Workload/Spokes/fintrack/identity
 terraform destroy -var-file=../../../../Deployment/Spokes/fintrack/dev.tfvars
 
-# 2. Spoke Data (MongoDB)
+# Step 2: Spoke Data (MongoDB — droplets can still exist)
 cd ../data
 terraform destroy -var-file=../../../../Deployment/Spokes/fintrack/dev.tfvars
 
-# 3. Spoke Network (droplets + firewall)
+# Step 3: Spoke Network (droplets + firewall — last spoke layer)
 cd ../network
 terraform destroy -var-file=../../../../Deployment/Spokes/fintrack/dev.tfvars
 
-# 4. Hub Identity
+# Step 4: Hub Identity
 cd Workload/Core/identity
 terraform destroy -var-file=../../../Deployment/Core/global.tfvars
 
-# 5. Hub Network (VPC) — last!
+# Step 5: Hub Network (VPC) — ALWAYS LAST!
 cd ../network
 terraform destroy -var-file=../../../Deployment/Core/global.tfvars
 ```
 
-> ⚠️ **Destroy order matters**! Destroying the VPC while droplets/MongoDB still reference it will leave resources **orphaned** in DigitalOcean (they still exist but can't be managed by Terraform).
+> ⚠️ **Why this order matters**: If you destroy the Hub VPC while droplets or MongoDB still reference it, those resources become **orphaned** — they still exist in DigitalOcean but Terraform can't manage them anymore. You'd have to manually clean them up through the DO console.
 
 ---
 
-## 📚 Related Documents
+## 📚 Related Docs
 
-| Document | Description |
-|----------|-------------|
-| [README.md](../readme.md) | Project overview and quick start |
-| [architecture.md](architecture.md) | Architecture deep dive |
-| [ci-cd-pipeline.md](ci-cd-pipeline.md) | CI/CD workflow deep dive |
-| [reference-architecture.md](reference-architecture.md) | Enterprise reference patterns |
+| Document | What It Covers |
+|----------|---------------|
+| [README.md](../readme.md) | Project overview, what I learned, getting started |
+| [architecture.md](architecture.md) | Hub-and-spoke, state bridges, module design |
+| [ci-cd-pipeline.md](ci-cd-pipeline.md) | GitOps pipeline, Headless Init Fix, troubleshooting |
+| [reference-architecture.md](reference-architecture.md) | Ways to extend, cost estimates, production hardening |

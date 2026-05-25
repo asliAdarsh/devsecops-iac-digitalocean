@@ -12,3 +12,8 @@ variable "project_name" {
   type        = string
   description = "The root name descriptor for the core platform layout."
 }
+
+variable "state_bucket_name" {
+  type        = string
+  description = "The name of the DigitalOcean Spaces bucket holding Terraform state files."
+}
